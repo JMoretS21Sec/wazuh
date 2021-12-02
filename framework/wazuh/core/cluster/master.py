@@ -159,7 +159,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         self.extra_valid_requested = False
 
         # Sync status variables. Used in cluster_control -i and GET/cluster/healthcheck.
-        default_date = datetime.fromtimestamp(0)
+        default_date = datetime.utcfromtimestamp(0)
         self.integrity_check_status = {'date_start_master': default_date, 'date_end_master': default_date}
         self.integrity_sync_status = {'date_start_master': default_date, 'tmp_date_start_master': default_date,
                                       'date_end_master': default_date, 'total_extra_valid': 0,
@@ -235,7 +235,8 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         elif command == b'get_health':
             cmd, res = self.get_health(json.loads(data))
             return cmd, json.dumps(res,
-                                   default=lambda o: "n/a" if isinstance(o, datetime) and o == datetime.fromtimestamp(0)
+                                   default=lambda o: "n/a" if isinstance(o,
+                                                                         datetime) and o == datetime.utcfromtimestamp(0)
                                    else (o.__str__() if isinstance(o, datetime) else None)
                                    ).encode()
         elif command == b'sendsync':
@@ -529,7 +530,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         """
         result = {'updated_chunks': 0, 'error_messages': {'chunks': [], 'others': []}, 'time_spent': 0}
         wdb_conn = WazuhDBConnection()
-        before = time()
+        before = datetime.utcnow().timestamp()
 
         try:
             with utils.Timeout(timeout):
@@ -546,7 +547,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         except Exception as e:
             result['error_messages']['others'].append(f'Error while processing agent-info chunks: {e}')
 
-        result['time_spent'] = time() - before
+        result['time_spent'] = datetime.utcnow().timestamp() - before
         wdb_conn.close()
         return result
 
@@ -565,7 +566,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         """
         logger = self.task_loggers['Agent-info sync']
         logger.info('Starting')
-        date_start_master = datetime.now()
+        date_start_master = datetime.utcnow()
 
         try:
             # Chunks were stored under 'task_id' as an string.
@@ -606,7 +607,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         # Send result to worker
         result['error_messages'] = [error[1] for error in result['error_messages']['chunks']]
         response = await self.send_request(command=b'syn_m_a_e', data=json.dumps(result).encode())
-        date_end_master = datetime.now()
+        date_end_master = datetime.utcnow()
         self.sync_agent_info_status.update({'date_start_master': date_start_master.strftime(decimals_date_format),
                                             'date_end_master': date_end_master.strftime(decimals_date_format),
                                             'n_synced_chunks': result['updated_chunks']})
@@ -643,7 +644,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
             Response message.
         """
         logger = self.task_loggers['Integrity check']
-        date_start_master = datetime.now()
+        date_start_master = datetime.utcnow()
         logger.info(f"Starting.")
 
         logger.debug("Waiting to receive zip file from worker.")
@@ -666,10 +667,10 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
         worker_files_ko, counts = wazuh.core.cluster.cluster.compare_files(self.server.integrity_control,
                                                                            files_metadata, self.name)
 
-        total_time = (datetime.now() - date_start_master).total_seconds()
+        total_time = (datetime.utcnow() - date_start_master).total_seconds()
         self.extra_valid_requested = bool(worker_files_ko['extra_valid'])
         self.integrity_check_status.update({'date_start_master': date_start_master.strftime(decimals_date_format),
-                                            'date_end_master': datetime.now().strftime(decimals_date_format)})
+                                            'date_end_master': datetime.utcnow().strftime(decimals_date_format)})
 
         # Get the total number of files that require some change.
         if not functools.reduce(operator.add, map(len, worker_files_ko.values())):
@@ -682,7 +683,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
 
             logger = self.task_loggers['Integrity sync']
             logger.info("Starting.")
-            self.integrity_sync_status.update({'tmp_date_start_master': datetime.now(), 'total_files': counts,
+            self.integrity_sync_status.update({'tmp_date_start_master': datetime.utcnow(), 'total_files': counts,
                                                'total_extra_valid': 0})
             logger.info("Files to create in worker: {} | Files to update in worker: {} | Files to delete in worker: {} "
                         "| Files to receive: {}".format(len(worker_files_ko['missing']), len(worker_files_ko['shared']),
@@ -733,7 +734,7 @@ class MasterHandler(server.AbstractServerHandler, c_common.WazuhCommon):
                 logger.debug("Finished sending files to worker.")
                 # Log 'Finished in' message only if there are no extra_valid files to sync.
                 if not self.extra_valid_requested:
-                    self.integrity_sync_status['date_end_master'] = datetime.now()
+                    self.integrity_sync_status['date_end_master'] = datetime.utcnow()
                     logger.info("Finished in {:.3f}s.".format((self.integrity_sync_status['date_end_master'] -
                                                                self.integrity_sync_status['tmp_date_start_master'])
                                                               .total_seconds()))
@@ -984,7 +985,7 @@ class Master(server.AbstractServer):
         """
         file_integrity_logger = self.setup_task_logger("Local integrity")
         while True:
-            before = datetime.now()
+            before = datetime.utcnow()
             file_integrity_logger.info("Starting.")
             try:
                 task = self.loop.run_in_executor(self.task_pool, wazuh.core.cluster.cluster.get_files_status)
@@ -995,7 +996,7 @@ class Master(server.AbstractServer):
             finally:
                 self.integrity_already_executed.clear()
 
-            file_integrity_logger.info(f"Finished in {(datetime.now() - before).total_seconds():.3f}s. Calculated "
+            file_integrity_logger.info(f"Finished in {(datetime.utcnow() - before).total_seconds():.3f}s. Calculated "
                                        f"metadata of {len(self.integrity_control)} files.")
 
             await asyncio.sleep(self.cluster_items['intervals']['master']['recalculate_integrity'])
@@ -1025,8 +1026,8 @@ class Master(server.AbstractServer):
                 Agent.get_agents_overview(filters={'status': 'active', 'node_name': node_name})['totalItems']
             if workers_info[node_name]['info']['type'] != 'master':
                 workers_info[node_name]['status']['last_keep_alive'] = str(
-                    datetime.fromtimestamp(workers_info[node_name]['status']['last_keep_alive']
-                                           ).strftime(decimals_date_format))
+                    datetime.utcfromtimestamp(workers_info[node_name]['status']['last_keep_alive']
+                                              ).strftime(decimals_date_format))
 
         return {"n_connected_nodes": n_connected_nodes, "nodes": workers_info}
 
